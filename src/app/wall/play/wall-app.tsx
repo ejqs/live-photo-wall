@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { WallPlayer, type PlayerHandle } from "@/wall/player";
-import { STATS_CHANNEL, wallLog, watchdogStore, type LogEntry, type LogKind, type WallCommand, type WallStatsMessage } from "@/wall/stats";
+import { STATS_CHANNEL, STATS_VERSION, wallLog, watchdogStore, type LogEntry, type LogKind, type WallCommand, type WallStatsMessage } from "@/wall/stats";
 import { countCached, registerServiceWorker, wallStore } from "@/wall/storage";
 import { imgUrl, type WallManifest } from "@/wall/types";
 
@@ -340,6 +340,7 @@ export function WallApp() {
       const { online, cachedOnDisk, warning, wakeLock } = live.current;
       const msg: WallStatsMessage = {
         type: "stats",
+        v: STATS_VERSION,
         wallName: m.wall.name,
         key,
         online,
