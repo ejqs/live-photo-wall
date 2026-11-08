@@ -51,4 +51,3 @@ export function countCached(urls: string[]): Promise<number | null> {
   });
 }
 
-export const STATS_CHANNEL = "lpw-wall-stats";
