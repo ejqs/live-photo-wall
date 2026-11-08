@@ -3,26 +3,9 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { WallPlayer, type PlayerHandle } from "@/wall/player";
-import { countCached, registerServiceWorker, STATS_CHANNEL, wallStore } from "@/wall/storage";
+import { STATS_CHANNEL, wallLog, watchdogStore, type LogEntry, type LogKind, type WallCommand, type WallStatsMessage } from "@/wall/stats";
+import { countCached, registerServiceWorker, wallStore } from "@/wall/storage";
 import { imgUrl, type WallManifest } from "@/wall/types";
-
-export type WallStatsMessage = {
-  type: "stats";
-  wallName: string;
-  key: string;
-  online: boolean;
-  manifestVersion: number;
-  ready: number;
-  total: number;
-  cachedOnDisk: number | null;
-  swaps: number;
-  upNext: string[];
-  onScreen: string[];
-  grid: { cols: number; rows: number };
-  warning: string | null;
-  fastLane: { photoId: string; at: number } | null;
-  at: number;
-};
 
 export function WallApp() {
   const router = useRouter();
@@ -43,6 +26,18 @@ export function WallApp() {
   const fetching = useRef<Promise<void> | null>(null);
   const wakeRef = useRef<WakeLockSentinel | null>(null);
   const warningRef = useRef<string | null>(null);
+  // for the stats window
+  const logRef = useRef<LogEntry[]>([]);
+  const startedAt = useRef(0);
+  const lastSyncAt = useRef<number | null>(null);
+  const serverVersion = useRef<number | null>(null);
+  const failed = useRef(new Set<string>());
+  const newlyCached = useRef(0);
+  const storageInfo = useRef<{ usage: number | null; persisted: boolean | null }>({ usage: null, persisted: null });
+  const frames = useRef({ fps: null as number | null, slow: [] as number[] });
+  const note = useCallback((k: LogKind, m: string) => {
+    logRef.current = wallLog.add(k, m);
+  }, []);
 
   useEffect(() => {
     manifestRef.current = manifest;
@@ -54,6 +49,8 @@ export function WallApp() {
   // ---- boot ----
   useEffect(() => {
     loadedAt.current = Date.now();
+    startedAt.current = Date.now();
+    logRef.current = wallLog.read();
     const k = new URLSearchParams(location.search).get("key")?.toUpperCase() ?? wallStore.key();
     if (!k) {
       router.replace("/wall");
@@ -67,8 +64,9 @@ export function WallApp() {
       manifestRef.current = cached;
       setManifest(cached);
     }
+    note("start", cached ? `Started from the saved copy of the wall (v${cached.version}, ${cached.photos.length} photos)` : "Started with nothing saved yet, downloading the wall");
     registerServiceWorker();
-  }, [router]);
+  }, [router, note]);
 
   const loadManifest = useCallback(async () => {
     if (!key) return;
@@ -83,11 +81,17 @@ export function WallApp() {
         }
         if (!res.ok) throw new Error(String(res.status));
         const m = (await res.json()) as WallManifest;
+        lastSyncAt.current = Date.now();
+        serverVersion.current = m.version;
         if (m.resyncAt && m.resyncAt > loadedAt.current && manifestRef.current?.resyncAt !== m.resyncAt && manifestRef.current) {
           wallStore.setManifest(m);
+          note("reload", "Resync requested from the admin, reloading");
           location.reload();
           return;
         }
+        const prev = manifestRef.current;
+        if (!prev) note("sync", `Downloaded the wall (v${m.version}, ${m.photos.length} photos)`);
+        else if (prev.version !== m.version) note("sync", describeChange(prev, m));
         wallStore.setManifest(m);
         if (manifestRef.current?.version !== m.version || manifestRef.current?.resyncAt !== m.resyncAt) manifestRef.current = m;
         setManifest((prev) => (prev && prev.version === m.version && prev.resyncAt === m.resyncAt ? prev : m));
@@ -99,7 +103,7 @@ export function WallApp() {
       }
     })();
     return fetching.current;
-  }, [key, router]);
+  }, [key, router, note]);
 
   useEffect(() => {
     loadManifest();
@@ -120,6 +124,8 @@ export function WallApp() {
       fastLane.current.delete(photoId);
       const inMs = Math.max(0, (r.showAt - performance.now() / 1000) * 1000);
       lastFast.current = { photoId, at: Date.now() + inMs };
+      const ph = m.photos.find((x) => x.id === photoId);
+      note("shown", `${ph?.name ?? "A guest"}’s new photo lands in cell ${r.row + 1}-${r.col + 1} in ${Math.round(inMs / 1000)} s`);
       try {
         await fetch("/api/wall/reservations", {
           method: "POST",
@@ -128,7 +134,7 @@ export function WallApp() {
         });
       } catch {}
     },
-    [key],
+    [key, note],
   );
   useEffect(() => {
     retryRef.current = (id, attempt) => void tryReserve(id, attempt);
@@ -143,7 +149,10 @@ export function WallApp() {
       try {
         const e = JSON.parse(msg.data);
         if (e.type === "manifest" && e.version !== manifestRef.current?.version) loadManifest();
-        if (e.type === "resync") location.reload();
+        if (e.type === "resync") {
+          note("reload", "Resync requested from the admin, reloading");
+          location.reload();
+        }
         if (e.type === "approved" && manifestRef.current?.wall.primary) {
           fastLane.current.add(e.photoId);
           loadManifest().then(() => {
@@ -177,6 +186,8 @@ export function WallApp() {
         });
         if (!res.ok) throw new Error();
         const b = await res.json();
+        lastSyncAt.current = Date.now();
+        serverVersion.current = b.version ?? null;
         setOnline(true);
         if (m && (b.version !== m.version || (b.resyncAt && b.resyncAt !== m.resyncAt))) loadManifest();
       } catch {
@@ -204,7 +215,7 @@ export function WallApp() {
       removeEventListener("online", onOnline);
       removeEventListener("offline", onOffline);
     };
-  }, [key, loadManifest, tryReserve]);
+  }, [key, loadManifest, tryReserve, note]);
 
   // ---- screen wake lock ----
   useEffect(() => {
@@ -247,53 +258,151 @@ export function WallApp() {
     return () => removeEventListener("keydown", onKey);
   }, []);
 
+  // ---- log going offline / online, and effect warnings ----
+  const offlineSince = useRef<number | null>(null);
+  useEffect(() => {
+    if (!key) return;
+    if (!online && offlineSince.current === null) {
+      offlineSince.current = Date.now();
+      note("net", "Offline, playing from the saved photos and retrying");
+    } else if (online && offlineSince.current !== null) {
+      note("net", `Back online after ${duration(Date.now() - offlineSince.current)}`);
+      offlineSince.current = null;
+    }
+  }, [online, key, note]);
+  useEffect(() => {
+    if (warning) note("warn", warning);
+  }, [warning, note]);
+
+  // ---- frame rate ----
+  useEffect(() => {
+    let raf = 0;
+    let last = performance.now();
+    let count = 0;
+    let windowStart = last;
+    const loop = (t: number) => {
+      const dt = t - last;
+      last = t;
+      count++;
+      // a long gap while the tab is visible is a dropped frame; a hidden tab doesn't count
+      if (dt > 50 && dt < 5000 && document.visibilityState === "visible") frames.current.slow.push(Date.now());
+      if (t - windowStart >= 1000) {
+        frames.current.fps = Math.round((count * 1000) / (t - windowStart));
+        count = 0;
+        windowStart = t;
+        const cutoff = Date.now() - 10 * 60_000;
+        frames.current.slow = frames.current.slow.filter((x) => x > cutoff);
+      }
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
   // ---- stats channel + watchdog + disk cache count ----
+  const live = useRef({ online, cachedOnDisk, warning, wakeLock });
+  useEffect(() => {
+    live.current = { online, cachedOnDisk, warning, wakeLock };
+  }, [online, cachedOnDisk, warning, wakeLock]);
   useEffect(() => {
     if (!key) return;
     let bc: BroadcastChannel | null = null;
     try {
       bc = new BroadcastChannel(STATS_CHANNEL);
+      bc.onmessage = (e: MessageEvent<WallCommand>) => {
+        const c = e.data;
+        if (c?.type === "note") note(c.k, c.m);
+        if (c?.type === "command" && c.cmd === "resync") {
+          note("admin", "Resync pressed on the stats screen, checking the server");
+          void loadManifest();
+        }
+        if (c?.type === "command" && c.cmd === "reload") {
+          note("reload", "Reload pressed on the stats screen");
+          location.reload();
+        }
+      };
     } catch {}
     let lastSwaps = -1;
     let stalled = 0;
+    let tick = 0;
     const t = setInterval(() => {
       const m = manifestRef.current;
       const engine = player.current?.engine();
       if (!m || !engine) return;
+      // count only photos still in the manifest (a removed photo stays decoded in memory)
+      const ready = m.photos.reduce((n, p) => n + (engine.isReady(p.id) ? 1 : 0), 0);
+      tick++;
+      if (newlyCached.current && tick % 5 === 0) {
+        note("cache", `Saved ${newlyCached.current} photo${newlyCached.current === 1 ? "" : "s"} (${ready} of ${m.photos.length} ready)`);
+        newlyCached.current = 0;
+      }
+      const act = engine.activity();
+      const { online, cachedOnDisk, warning, wakeLock } = live.current;
       const msg: WallStatsMessage = {
         type: "stats",
         wallName: m.wall.name,
         key,
         online,
+        lastSyncAt: lastSyncAt.current,
+        startedAt: startedAt.current,
         manifestVersion: m.version,
-        ready: player.current?.readyCount() ?? 0,
+        serverVersion: serverVersion.current,
+        designVersion: m.designVersion,
+        motionVersion: m.motion.version,
+        ready,
         total: m.photos.length,
+        failed: failed.current.size,
         cachedOnDisk,
+        storage: storageInfo.current,
         swaps: engine.swaps,
-        upNext: engine.upNext(400),
-        onScreen: engine.shownIds(),
+        every: act.every,
+        changing: act.changing,
+        limit: act.limit,
+        maxChanging: act.maxChanging,
+        priority: act.priority,
+        fps: document.visibilityState === "visible" ? frames.current.fps : null,
+        slowFrames: frames.current.slow.length,
+        fontsLoaded: document.fonts?.status === "loaded",
+        showQr: m.wall.showQr,
+        wakeLock,
+        lastWatchdogReload: watchdogStore.last(),
+        upNext: engine.upNext(1000),
+        cells: engine.cellIds(),
         grid: engine.grid(),
+        aspect: innerWidth / Math.max(1, innerHeight),
         warning,
         fastLane: lastFast.current,
+        log: logRef.current.slice(0, 200),
         at: Date.now(),
       };
       bc?.postMessage(msg);
       // watchdog: if nothing has swapped for 3 minutes while photos are ready, reload the page
-      if (engine.swaps === lastSwaps && (player.current?.readyCount() ?? 0) > 1 && document.visibilityState === "visible") stalled++;
+      if (engine.swaps === lastSwaps && ready > 1 && document.visibilityState === "visible") stalled++;
       else stalled = 0;
       lastSwaps = engine.swaps;
-      if (stalled > 180) location.reload();
+      if (stalled > 180) {
+        watchdogStore.mark();
+        note("reload", "No swaps for 3 minutes, the watchdog reloaded the wall");
+        location.reload();
+      }
     }, 1000);
-    const disk = setInterval(async () => {
+    const disk = async () => {
       const m = manifestRef.current;
       if (m) setCachedOnDisk(await countCached(m.photos.map((p) => imgUrl("view", p.hash))));
-    }, 30000);
+      try {
+        const [est, persisted] = await Promise.all([navigator.storage?.estimate?.(), navigator.storage?.persisted?.()]);
+        storageInfo.current = { usage: est?.usage ?? null, persisted: persisted ?? null };
+      } catch {}
+    };
+    const diskT = setInterval(disk, 30000);
+    const firstDisk = setTimeout(disk, 3000);
     return () => {
       clearInterval(t);
-      clearInterval(disk);
+      clearInterval(diskT);
+      clearTimeout(firstDisk);
       bc?.close();
     };
-  }, [key, online, cachedOnDisk, warning]);
+  }, [key, note, loadManifest]);
 
   if (!manifest)
     return (
@@ -310,10 +419,18 @@ export function WallApp() {
         manifest={manifest}
         onReady={(id, _t, n) => {
           setReady(n);
+          newlyCached.current++;
+          failed.current.delete(id);
           if (fastLane.current.has(id)) tryReserve(id);
         }}
         onShown={(id) => shownBatch.current.push(id)}
         onWarning={setWarning}
+        onFailed={(id) => {
+          if (failed.current.has(id)) return;
+          failed.current.add(id);
+          const p = manifestRef.current?.photos.find((x) => x.id === id);
+          note("skip", `Couldn’t load ${p?.name ? `${p.name}’s photo` : `photo ${p?.hash.slice(0, 6) ?? id.slice(0, 6)}`}, skipped it`);
+        }}
       />
       {(showStatus || (ready === 0 && total > 0)) && (
         <div className="fixed bottom-4 left-4 z-50 flex flex-col gap-1 rounded-lg bg-black/75 px-3 py-2 font-mono text-xs text-white">
@@ -332,4 +449,26 @@ export function WallApp() {
       )}
     </main>
   );
+}
+
+function duration(ms: number) {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s} s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} m ${s % 60} s`;
+  return `${Math.floor(m / 60)} h ${m % 60} m`;
+}
+
+function describeChange(prev: WallManifest, next: WallManifest) {
+  const parts: string[] = [];
+  const before = new Set(prev.photos.map((p) => p.id));
+  const after = new Set(next.photos.map((p) => p.id));
+  const added = next.photos.filter((p) => !before.has(p.id)).length;
+  const removed = prev.photos.filter((p) => !after.has(p.id)).length;
+  if (added) parts.push(`${added} photo${added === 1 ? "" : "s"} added`);
+  if (removed) parts.push(`${removed} removed`);
+  if (prev.designVersion !== next.designVersion) parts.push(`design v${prev.designVersion} → v${next.designVersion}`);
+  if (prev.motion.version !== next.motion.version) parts.push(`motion v${prev.motion.version} → v${next.motion.version}`);
+  if (prev.wall.cols !== next.wall.cols || prev.wall.rows !== next.wall.rows) parts.push(`grid ${next.wall.cols}×${next.wall.rows}`);
+  return `Updated v${prev.version} → v${next.version}${parts.length ? ` (${parts.join(", ")})` : ""}`;
 }

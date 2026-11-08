@@ -24,6 +24,8 @@ export type PlayerProps = {
   onReady?: (photoId: string, total: number, ready: number) => void;
   onShown?: (photoId: string) => void;
   onWarning?: (w: string | null) => void;
+  /** a photo could not be downloaded or decoded after several tries; it stays out of the rotation */
+  onFailed?: (photoId: string) => void;
   /** at most this many images download at once */
   concurrency?: number;
 };
@@ -35,7 +37,7 @@ export function resolveEffect(manifest: WallManifest): { doc: MotionDoc; params:
 }
 
 export const WallPlayer = forwardRef<PlayerHandle, PlayerProps>(function WallPlayer(
-  { manifest, mode = "live", hideQr, seed, effectOverride, onReady, onShown, onWarning, concurrency = 6 },
+  { manifest, mode = "live", hideQr, seed, effectOverride, onReady, onShown, onWarning, onFailed, concurrency = 6 },
   ref,
 ) {
   const gridRef = useRef<HTMLDivElement>(null);
@@ -43,8 +45,8 @@ export const WallPlayer = forwardRef<PlayerHandle, PlayerProps>(function WallPla
   const clock = useRef(0);
   const loading = useRef(new Set<string>());
   const readyRef = useRef(new Set<string>());
-  const cbs = useRef({ onReady, onShown, onWarning });
-  cbs.current = { onReady, onShown, onWarning };
+  const cbs = useRef({ onReady, onShown, onWarning, onFailed });
+  cbs.current = { onReady, onShown, onWarning, onFailed };
 
   const effect = useMemo(() => {
     if (effectOverride) return { ...effectOverride, warning: null };
@@ -115,7 +117,8 @@ export const WallPlayer = forwardRef<PlayerHandle, PlayerProps>(function WallPla
           cbs.current.onReady?.(p.id, total, readyRef.current.size);
           break;
         } catch {
-          await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+          if (attempt === 3) cbs.current.onFailed?.(p.id);
+          else await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
         }
       }
       loading.current.delete(p.id);

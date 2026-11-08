@@ -195,6 +195,18 @@ export class WallEngine {
     return { cols: this.cols, rows: this.rows };
   }
 
+  /** What each cell shows, in reading order (the photo it is changing to, mid-swap). */
+  cellIds(): (string | null)[] {
+    return this.cells.map((c) => c.swap?.photoId ?? c.photoId);
+  }
+
+  /** Cells changing right now, the most allowed at once, priority photos waiting, seconds between swaps. */
+  activity() {
+    const changing = this.cells.filter((c) => c.swap || c.pending).length;
+    const limit = Math.max(1, Math.floor(this.sched.maxChanging * this.cells.length));
+    return { changing, limit, cells: this.cells.length, priority: this.priority.length, every: this.sched.every, maxChanging: this.sched.maxChanging };
+  }
+
   // ---------- main loop ----------
 
   tick(now: number) {
