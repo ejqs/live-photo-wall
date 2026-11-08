@@ -7,7 +7,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { formatLogLine, STATS_CHANNEL, type LogEntry, type LogKind, type WallCommand, type WallStatsMessage } from "@/wall/stats";
+import { formatLogLine, STATS_CHANNEL, STATS_VERSION, type LogEntry, type LogKind, type WallCommand, type WallStatsMessage } from "@/wall/stats";
 import { wallStore } from "@/wall/storage";
 import { imgUrl, type WallManifest, type WallPhoto } from "@/wall/types";
 
@@ -31,6 +31,8 @@ export function StatsApp() {
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [now, setNow] = useState(() => Date.now());
   const [swapRate, setSwapRate] = useState<number | null>(null);
+  // a wall tab opened before an update sends the old message shape; ask for a reload instead of crashing
+  const [outdatedAt, setOutdatedAt] = useState<number | null>(null);
   const bc = useRef<BroadcastChannel | null>(null);
   const swapHistory = useRef<{ at: number; swaps: number }[]>([]);
 
@@ -42,6 +44,10 @@ export function StatsApp() {
       bc.current.onmessage = (e) => {
         const s = e.data as WallStatsMessage;
         if (s?.type !== "stats") return;
+        if (s.v !== STATS_VERSION) {
+          setOutdatedAt(Date.now());
+          return;
+        }
         setStats(s);
         setManifest((m) => (m && m.version === s.manifestVersion ? m : wallStore.manifest()));
         // swaps per minute over the last minute
@@ -141,7 +147,9 @@ export function StatsApp() {
       <header className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-xl font-bold lg:text-2xl">{stats?.wallName ?? manifest?.wall.name ?? "Wall"} · stats</h1>
         <div className="flex flex-wrap gap-2">
-          {stale ? (
+          {stale && outdatedAt && now - outdatedAt < 5000 ? (
+            <Pill tone="bad">The wall tab is running an older version. Reload it (or press F5 on the wall) to see stats.</Pill>
+          ) : stale ? (
             <Pill tone="bad">Not hearing from the wall. Is it open in this browser?</Pill>
           ) : (
             <>

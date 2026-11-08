@@ -10,8 +10,12 @@ export const STATS_CHANNEL = "lpw-wall-stats";
 export type LogKind = "start" | "sync" | "net" | "cache" | "shown" | "skip" | "warn" | "remove" | "admin" | "reload";
 export type LogEntry = { at: number; k: LogKind; m: string };
 
+/** bump when WallStatsMessage changes shape, so a stats window can spot a wall running older code */
+export const STATS_VERSION = 2;
+
 export type WallStatsMessage = {
   type: "stats";
+  v: number;
   wallName: string;
   key: string;
   online: boolean;
