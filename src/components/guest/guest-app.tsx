@@ -1,22 +1,21 @@
 "use client";
 
-import { CameraIcon, CheckCircle2Icon, ClockIcon, EyeOffIcon, ImagesIcon, ImageUpIcon } from "lucide-react";
+import { CameraIcon, CheckCircle2Icon, ChevronLeftIcon, ClockIcon, EyeOffIcon, ImagesIcon, ImageUpIcon } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
-import { Textarea } from "@/components/ui/textarea";
 import type { GuestPhoto } from "@/lib/guest-photos";
 import type { GuestPageSettings } from "@/lib/settings-types";
 import { cn } from "@/lib/utils";
 import { postWithProgress, prepareImage } from "./prepare-image";
 import { WallMap, whereText } from "./wall-map";
 
-type Upload = { key: string; name: string; progress: number; state: "preparing" | "uploading" | "done" | "error"; error?: string };
+type Upload = { key: string; name: string; progress: number; state: "preparing" | "uploading" | "done" | "error"; error?: string; sizes?: [number, number] };
 type Live = { photoId: string; row: number; col: number; rows: number; cols: number; showAt: number; hold: number; wallName: string; thumb?: string };
 
 export function GuestApp(props: {
@@ -43,6 +42,11 @@ export function GuestApp(props: {
   const [dismissed, setDismissed] = useState<string | null>(null);
   // the guest cookie is set by the first upload, so the live connection is reopened after an upload
   const [conn, setConn] = useState(0);
+  // first visit: name, then pick, then review and send. Returning guests start at "home".
+  const [step, setStep] = useState<"name" | "home" | "review">(props.initialName || props.initialPhotos.length ? "home" : "name");
+  const [picked, setPicked] = useState<{ file: File; url: string }[]>([]);
+  const [agree, setAgree] = useState(false);
+  const [sending, setSending] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const libraryRef = useRef<HTMLInputElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
@@ -51,11 +55,14 @@ export function GuestApp(props: {
     if (!props.initialName) {
       try {
         const saved = localStorage.getItem("lpw-name");
-        // eslint-disable-next-line react-hooks/set-state-in-effect -- localStorage is only readable after mount
-        if (saved) setName(saved);
+        if (saved) {
+          // eslint-disable-next-line react-hooks/set-state-in-effect -- localStorage is only readable after mount
+          setName(saved);
+          if (!props.preview) setStep("home");
+        }
       } catch {}
     }
-  }, [props.initialName]);
+  }, [props.initialName, props.preview]);
 
   const refresh = useCallback(async () => {
     try {
@@ -118,22 +125,43 @@ export function GuestApp(props: {
   const remaining = Math.max(0, s.perGuest - used - uploads.filter((u) => u.state !== "done" && u.state !== "error").length);
   const canPick = s.open && (s.library || s.camera) && remaining > 0;
 
-  async function onFiles(list: FileList | null) {
+  const clearPicked = () =>
+    setPicked((ps) => {
+      ps.forEach((p) => URL.revokeObjectURL(p.url));
+      return [];
+    });
+
+  function onPick(list: FileList | null) {
     setError(null);
     if (!list?.length) return;
+    const files = Array.from(list).slice(0, remaining);
+    if (files.length < list.length) setError(`You can add ${remaining} more photo${remaining === 1 ? "" : "s"}, so the first ${files.length} were picked.`);
+    clearPicked();
+    setPicked(files.map((file) => ({ file, url: URL.createObjectURL(file) })));
+    setStep("review");
+  }
+
+  function saveName() {
+    if (!name.trim()) return;
+    try {
+      localStorage.setItem("lpw-name", name.trim());
+    } catch {}
+    setError(null);
+    setStep("home");
+  }
+
+  async function send() {
+    setError(null);
     if (!name.trim()) {
-      setError("Please add your name first. It's shown with your photos.");
+      setStep("name");
       return;
     }
     if (s.captionRequired && !caption.trim()) {
       setError("Please add a caption first.");
       return;
     }
-    try {
-      localStorage.setItem("lpw-name", name.trim());
-    } catch {}
-    const files = Array.from(list).slice(0, remaining);
-    if (files.length < list.length) setError(`You can add ${remaining} more photo${remaining === 1 ? "" : "s"}.`);
+    const files = picked.map((p) => p.file);
+    setSending(true);
     const batch = files.map((f, i) => ({ key: `${Date.now()}-${i}`, name: f.name, progress: 0, state: "preparing" as const }));
     setUploads((u) => [...batch, ...u]);
     const update = (key: string, patch: Partial<Upload>) => setUploads((u) => u.map((x) => (x.key === key ? { ...x, ...patch } : x)));
@@ -142,7 +170,7 @@ export function GuestApp(props: {
       const key = batch[i].key;
       try {
         const prepared = await prepareImage(files[i]);
-        update(key, { state: "uploading" });
+        update(key, { state: "uploading", sizes: [files[i].size, prepared.blob.size] });
         const form = new FormData();
         form.set("slug", props.slug);
         form.set("name", name.trim());
@@ -163,7 +191,11 @@ export function GuestApp(props: {
         update(key, { state: "error", error: "Upload failed. Try again." });
       }
     }
+    setSending(false);
     setCaption("");
+    setAgree(false);
+    clearPicked();
+    setStep("home");
     if (sent) setConn((c) => c + 1);
     await refresh();
     setTimeout(() => setUploads((u) => u.filter((x) => x.state !== "done")), 4000);
@@ -180,6 +212,75 @@ export function GuestApp(props: {
 
   const btnStyle = useMemo(() => ({ backgroundColor: s.buttonColor, color: readableOn(s.buttonColor) }), [s.buttonColor]);
   const secondsLeft = live ? Math.ceil((live.showAt - now) / 1000) : 0;
+
+  if (step === "review" && picked.length) {
+    const active = uploads.filter((u) => u.state === "preparing" || u.state === "uploading");
+    const progress = active.length ? active.reduce((n, u) => n + u.progress, 0) / active.length : 0;
+    const sizes = active.find((u) => u.sizes)?.sizes;
+    const one = picked.length === 1;
+    return (
+      <main className="mx-auto flex min-h-dvh max-w-md flex-col gap-5 px-6 pt-5 pb-6">
+        <div className="flex items-center justify-between">
+          <Button
+            variant="outline"
+            size="icon-lg"
+            aria-label="Back"
+            disabled={sending}
+            onClick={() => {
+              clearPicked();
+              setStep("home");
+            }}
+          >
+            <ChevronLeftIcon />
+          </Button>
+          <strong className="text-base">{one ? "Review your photo" : `Review ${picked.length} photos`}</strong>
+          <span className="w-10" />
+        </div>
+        {one ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={picked[0].url} alt="The photo you picked" className="aspect-[4/3] w-full rounded-xl bg-muted object-cover" />
+        ) : (
+          <ul className="grid grid-cols-3 gap-2">
+            {picked.map((p) => (
+              <li key={p.url}>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={p.url} alt="" className="aspect-square w-full rounded-lg bg-muted object-cover" />
+              </li>
+            ))}
+          </ul>
+        )}
+        <Field>
+          <FieldLabel htmlFor="guest-caption">
+            Caption{" "}
+            <span className="font-normal text-muted-foreground">{s.captionRequired ? "(required" : "(optional"}, shown with your name in the guest gallery)</span>
+          </FieldLabel>
+          <Input id="guest-caption" value={caption} onChange={(e) => setCaption(e.target.value)} maxLength={140} className="h-12 text-base" disabled={sending} />
+        </Field>
+        <label className="flex items-start gap-2.5 text-sm leading-snug">
+          <input type="checkbox" checked={agree} onChange={(e) => setAgree(e.target.checked)} disabled={sending} className="mt-0.5 size-5 shrink-0 accent-zinc-900" />
+          I took {one ? "this photo" : "these photos"} or have permission to share {one ? "it" : "them"}, and everyone in {one ? "it" : "them"} is fine with being shown.
+        </label>
+        {error && (
+          <Alert variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
+        <div className="flex-1" />
+        {sending && (
+          <div className="flex flex-col gap-2">
+            <div className="flex justify-between text-[13px] text-muted-foreground">
+              <span>{sizes ? `Optimizing (${mb(sizes[0])} → ${mb(sizes[1])})` : "Optimizing…"}</span>
+              <span>{active[0]?.state === "uploading" ? `Uploading ${Math.round(progress * 100)}%` : ""}</span>
+            </div>
+            <Progress value={progress * 100} />
+          </div>
+        )}
+        <Button size="lg" className="h-13 text-base" style={btnStyle} disabled={!agree || sending || (s.captionRequired && !caption.trim())} onClick={send}>
+          {sending ? "Sending…" : "Send to the wall"}
+        </Button>
+      </main>
+    );
+  }
 
   return (
     <main inert={props.preview} className="mx-auto flex min-h-dvh max-w-md flex-col gap-5 px-4 pt-5 pb-10">
@@ -203,68 +304,88 @@ export function GuestApp(props: {
         <LiveCountdown live={live} secondsLeft={secondsLeft} photo={photos.find((p) => p.id === live.photoId) ?? null} onClose={() => setDismissed(live.photoId)} />
       )}
 
-      <section className="flex flex-col gap-4 rounded-xl border bg-card p-4">
-        <div className="flex flex-col gap-1">
+      {!s.open ? (
+        <section className="flex flex-col gap-3 rounded-xl border bg-card p-4">
           <h1 className="text-xl font-semibold">{s.headline}</h1>
-          <p className="text-sm text-muted-foreground">{s.intro}</p>
-        </div>
-        {s.open ? (
-          <FieldGroup>
-            <Field>
-              <FieldLabel htmlFor="guest-name">Your name *</FieldLabel>
-              <Input id="guest-name" value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" maxLength={60} required />
-              <FieldDescription>Shown with your photos.</FieldDescription>
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="guest-caption">Caption{s.captionRequired ? " *" : " (optional)"}</FieldLabel>
-              <Textarea id="guest-caption" value={caption} onChange={(e) => setCaption(e.target.value)} maxLength={140} rows={2} />
-            </Field>
-            <div className="flex flex-col gap-2">
-              {s.library && (
-                <Button size="lg" style={btnStyle} disabled={!canPick} onClick={() => libraryRef.current?.click()}>
-                  <ImagesIcon data-icon="inline-start" />
-                  Choose from your photos
-                </Button>
-              )}
-              {s.camera && (
-                <Button size="lg" variant="outline" disabled={!canPick} onClick={() => cameraRef.current?.click()}>
-                  <CameraIcon data-icon="inline-start" />
-                  Take a photo
-                </Button>
-              )}
-              <input ref={libraryRef} type="file" accept="image/*,.heic,.heif" multiple hidden onChange={(e) => { onFiles(e.target.files); e.target.value = ""; }} />
-              <input ref={cameraRef} type="file" accept="image/*" capture="environment" hidden onChange={(e) => { onFiles(e.target.files); e.target.value = ""; }} />
-            </div>
-            <p className="text-xs text-muted-foreground">
-              {remaining > 0 ? `Up to ${s.perGuest} photos each · ${remaining} left for you.` : `You've added ${s.perGuest} photos. Thank you!`} No account needed.
-            </p>
-          </FieldGroup>
-        ) : (
           <Alert>
             <AlertDescription>Uploads are closed. Thanks for sharing!</AlertDescription>
           </Alert>
-        )}
-        {error && (
-          <Alert variant="destructive">
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        )}
-        {uploads.length > 0 && (
-          <ul className="flex flex-col gap-2">
-            {uploads.map((u) => (
-              <li key={u.key} className="flex flex-col gap-1 text-sm">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="truncate">{u.name}</span>
-                  <span className="shrink-0 text-xs text-muted-foreground">
-                    {u.state === "preparing" ? "Preparing…" : u.state === "uploading" ? `${Math.round(u.progress * 100)}%` : u.state === "done" ? "Sent ✓" : ""}
-                  </span>
-                </div>
-                {u.state === "error" ? <span className="text-xs text-destructive">{u.error}</span> : <Progress value={u.progress * 100} />}
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+        </section>
+      ) : step === "name" ? (
+        <form
+          className="flex flex-col gap-5"
+          onSubmit={(e) => {
+            e.preventDefault();
+            saveName();
+          }}
+        >
+          <div className="flex flex-col gap-2">
+            <h1 className="text-[26px] leading-tight font-bold tracking-tight">First, what’s your name?</h1>
+            <p className="text-[15px] text-muted-foreground">Your name is shown with your photos. Next, you’ll pick the photos to share.</p>
+          </div>
+          <Field>
+            <FieldLabel htmlFor="guest-name">
+              Your name <span className="text-destructive">*</span>
+            </FieldLabel>
+            <Input id="guest-name" value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" maxLength={60} placeholder="Shown with your photos" required className="h-12 text-base" />
+          </Field>
+          <Button type="submit" size="lg" className="h-13 text-base" style={btnStyle} disabled={!name.trim()}>
+            Continue
+          </Button>
+        </form>
+      ) : (
+        <section className="flex flex-col gap-4 rounded-xl border bg-card p-4">
+          <div className="flex flex-col gap-1">
+            <h1 className="text-xl font-semibold">{s.headline}</h1>
+            <p className="text-sm text-muted-foreground">{s.intro}</p>
+          </div>
+          <p className="text-sm">
+            Sharing as <strong>{name}</strong>{" "}
+            <button type="button" className="text-muted-foreground underline underline-offset-2" onClick={() => setStep("name")}>
+              Change
+            </button>
+          </p>
+          <div className="flex flex-col gap-2">
+            {s.library && (
+              <Button size="lg" className="h-13 text-base" style={btnStyle} disabled={!canPick} onClick={() => libraryRef.current?.click()}>
+                <ImagesIcon data-icon="inline-start" />
+                {photos.length ? "Add another photo" : "Choose from your photos"}
+              </Button>
+            )}
+            {s.camera && (
+              <Button size="lg" variant="outline" className="h-13 text-base" disabled={!canPick} onClick={() => cameraRef.current?.click()}>
+                <CameraIcon data-icon="inline-start" />
+                Take a photo
+              </Button>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {remaining > 0 ? `Up to ${s.perGuest} photos each · ${remaining} left for you.` : `You've added ${s.perGuest} photos. Thank you!`} No account needed.
+          </p>
+          {error && (
+            <Alert variant="destructive">
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
+          {uploads.length > 0 && (
+            <ul className="flex flex-col gap-2">
+              {uploads.map((u) => (
+                <li key={u.key} className="flex flex-col gap-1 text-sm">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate">{u.name}</span>
+                    <span className="shrink-0 text-xs text-muted-foreground">
+                      {u.state === "preparing" ? "Preparing…" : u.state === "uploading" ? `${Math.round(u.progress * 100)}%` : u.state === "done" ? "Sent ✓" : ""}
+                    </span>
+                  </div>
+                  {u.state === "error" ? <span className="text-xs text-destructive">{u.error}</span> : <Progress value={u.progress * 100} />}
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
+      <input ref={libraryRef} type="file" accept="image/*,.heic,.heif" multiple hidden onChange={(e) => { onPick(e.target.files); e.target.value = ""; }} />
+      <input ref={cameraRef} type="file" accept="image/*" capture="environment" hidden onChange={(e) => { onPick(e.target.files); e.target.value = ""; }} />
 
       {(visible.length > 0 || hidden.length > 0) && (
         <section className="flex flex-col gap-3">
@@ -384,6 +505,10 @@ function StatusChip({ photo, countdown }: { photo: GuestPhoto; countdown: boolea
       {upcoming ? "Going up in a moment" : photo.firstShownAt ? "On the wall" : "Approved"}
     </Badge>
   );
+}
+
+function mb(n: number) {
+  return n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.round(n / 1e3)} KB`;
 }
 
 function readableOn(hex: string) {
