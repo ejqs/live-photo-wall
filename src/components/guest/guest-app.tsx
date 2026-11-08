@@ -40,6 +40,9 @@ export function GuestApp(props: {
   const [error, setError] = useState<string | null>(null);
   const [showHidden, setShowHidden] = useState(false);
   const [live, setLive] = useState<Live | null>(null);
+  const [dismissed, setDismissed] = useState<string | null>(null);
+  // the guest cookie is set by the first upload, so the live connection is reopened after an upload
+  const [conn, setConn] = useState(0);
   const [now, setNow] = useState(() => Date.now());
   const libraryRef = useRef<HTMLInputElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
@@ -80,7 +83,15 @@ export function GuestApp(props: {
       setTimeout(refresh, 3000);
     };
     return () => es.close();
-  }, [refresh, props.preview]);
+  }, [refresh, props.preview, conn]);
+
+  // backup for a dropped live connection: check again while a photo waits for review or a countdown
+  const waiting = photos.some((p) => p.status === "pending" || (p.status === "approved" && !p.firstShownAt));
+  useEffect(() => {
+    if (props.preview || !waiting) return;
+    const t = setInterval(refresh, 10000);
+    return () => clearInterval(t);
+  }, [waiting, refresh, props.preview]);
 
   // pick up a reservation that arrived before this page opened
   useEffect(() => {
@@ -126,6 +137,7 @@ export function GuestApp(props: {
     const batch = files.map((f, i) => ({ key: `${Date.now()}-${i}`, name: f.name, progress: 0, state: "preparing" as const }));
     setUploads((u) => [...batch, ...u]);
     const update = (key: string, patch: Partial<Upload>) => setUploads((u) => u.map((x) => (x.key === key ? { ...x, ...patch } : x)));
+    let sent = 0;
     for (let i = 0; i < files.length; i++) {
       const key = batch[i].key;
       try {
@@ -143,12 +155,16 @@ export function GuestApp(props: {
         if (!res.ok) {
           update(key, { state: "error", error: String(res.body.error ?? "Upload failed. Try again.") });
           if (res.status === 410 || res.status === 403 || res.status === 429) break;
-        } else update(key, { state: "done", progress: 1 });
+        } else {
+          update(key, { state: "done", progress: 1 });
+          sent++;
+        }
       } catch {
         update(key, { state: "error", error: "Upload failed. Try again." });
       }
     }
     setCaption("");
+    if (sent) setConn((c) => c + 1);
     await refresh();
     setTimeout(() => setUploads((u) => u.filter((x) => x.state !== "done")), 4000);
   }
@@ -183,22 +199,8 @@ export function GuestApp(props: {
         <p className="font-[family-name:var(--font-display)] text-4xl tracking-wide uppercase">{props.eventName}</p>
       </header>
 
-      {live && (
-        <section aria-live="polite" className="flex flex-col gap-3 rounded-xl bg-zinc-950 p-4 text-white">
-          {secondsLeft > 0 ? (
-            <>
-              <strong className="text-lg">Your photo goes up in {secondsLeft}…</strong>
-              <span className="text-sm text-zinc-300">Look at the {live.wallName}: {whereText(live.row, live.col)}.</span>
-            </>
-          ) : (
-            <>
-              <strong className="text-lg">On the wall now!</strong>
-              <span className="text-sm text-zinc-300">Look here: {whereText(live.row, live.col)}.</span>
-            </>
-          )}
-          <WallMap rows={live.rows} cols={live.cols} row={live.row} col={live.col} />
-          <span className="text-xs text-zinc-400">Map of the wall as you face it.</span>
-        </section>
+      {live && dismissed !== live.photoId && (
+        <LiveCountdown live={live} secondsLeft={secondsLeft} photo={photos.find((p) => p.id === live.photoId) ?? null} onClose={() => setDismissed(live.photoId)} />
       )}
 
       <section className="flex flex-col gap-4 rounded-xl border bg-card p-4">
@@ -317,6 +319,51 @@ export function GuestApp(props: {
 
       {s.logoPosition !== "top" && logos}
     </main>
+  );
+}
+
+/** Full-screen countdown when the wall has picked a spot for the guest's new photo. */
+function LiveCountdown({ live, secondsLeft, photo, onClose }: { live: Live; secondsLeft: number; photo: GuestPhoto | null; onClose: () => void }) {
+  const landed = secondsLeft <= 0;
+  return (
+    <div role="dialog" aria-modal="true" aria-labelledby="live-h" className="fixed inset-0 z-50 overflow-y-auto bg-zinc-950 text-zinc-50">
+      <div className="mx-auto flex min-h-full max-w-md flex-col gap-6 px-6 pt-8 pb-6">
+        <div className="flex flex-col items-center gap-1.5 text-center">
+          <span className="text-sm font-semibold text-green-300">Approved</span>
+          <h2 id="live-h" className="text-2xl font-bold">
+            {landed ? "There it is!" : "Your photo is going up in"}
+          </h2>
+        </div>
+        <div aria-live="polite" className="flex h-36 items-center justify-center">
+          {landed ? (
+            <span className="text-4xl font-extrabold text-green-300">On the wall now</span>
+          ) : (
+            <span className="text-[132px] leading-none font-extrabold tabular-nums">{secondsLeft}</span>
+          )}
+        </div>
+        <div className="flex flex-col gap-2.5">
+          <span className="text-center text-[15px] font-semibold">
+            Look {live.wallName ? `at the ${live.wallName}` : "here"}: {whereText(live.row, live.col)}
+          </span>
+          <WallMap rows={live.rows} cols={live.cols} row={live.row} col={live.col} photo={landed ? photo?.thumb : null} className="rounded-lg border border-zinc-700 p-2.5" />
+          <span className="text-center text-xs text-zinc-400">Map of the wall as you face it. The title and QR sit on top of the grid.</span>
+        </div>
+        {photo && (
+          <div className="flex items-center gap-3 rounded-xl border border-zinc-800 p-3">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={photo.thumb} alt="" className="h-14 w-18 shrink-0 rounded-md object-cover" />
+            <div className="flex min-w-0 flex-col gap-0.5">
+              <span className="truncate text-sm font-medium">{photo.caption || "Your photo"}</span>
+              <span className="text-xs text-zinc-400">Stays up at least {Math.max(10, Math.round(live.hold))} s, then comes back as the wall loops</span>
+            </div>
+          </div>
+        )}
+        <div className="flex-1" />
+        <Button size="lg" variant="outline" className="border-zinc-700 bg-transparent text-zinc-50 hover:bg-zinc-900 hover:text-zinc-50" onClick={onClose}>
+          Back to my photos
+        </Button>
+      </div>
+    </div>
   );
 }
 

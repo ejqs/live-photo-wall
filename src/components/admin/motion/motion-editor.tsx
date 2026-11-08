@@ -22,26 +22,56 @@ export const DRAFT_CHANNEL = "wallmotion-draft";
 export type MotionDraftMessage = { type: "draft"; sliders: MotionSliders; effect: string; params: Record<string, number> };
 
 type SliderDef = { k: keyof MotionSliders; label: string; min: number; max: number; step: number; unit?: string; hint?: string };
-const TIMING: SliderDef[] = [
-  { k: "swapEvery", label: "A new swap starts every", min: 0.1, max: 10, step: 0.05, unit: "s" },
-  { k: "jitter", label: "Randomness in that timing", min: 0, max: 0.49, step: 0.01, unit: "×" },
-  { k: "maxChanging", label: "Most photos changing at once", min: 0.01, max: 1, step: 0.01, unit: "%" },
-  { k: "hold", label: "A photo stays at least", min: 0, max: 60, step: 0.5, unit: "s" },
-];
-const LOOK: SliderDef[] = [
-  { k: "speed", label: "Overall speed", min: 0.1, max: 3, step: 0.05, unit: "×" },
-  { k: "whiten", label: "Whiten", min: 0, max: 3, step: 0.01, unit: "s" },
-  { k: "emptyMin", label: "Empty pause (shortest)", min: 0, max: 3, step: 0.01, unit: "s" },
-  { k: "emptyMax", label: "Empty pause (longest)", min: 0, max: 3, step: 0.01, unit: "s" },
-  { k: "slide", label: "Drop in", min: 0.05, max: 5, step: 0.01, unit: "s" },
-  { k: "slideFrom", label: "Drop from (cell heights)", min: 0, max: 3, step: 0.05, unit: "×" },
-  { k: "fadeIn", label: "Fade in during drop", min: 0, max: 1, step: 0.01, unit: "%" },
-  { k: "tilt", label: "Tilt", min: 0, max: 20, step: 0.1, unit: "°" },
-  { k: "settle", label: "Overshoot", min: 0.5, max: 2, step: 0.01, unit: "×" },
-  { k: "vary", label: "Vary each swap by", min: 0, max: 0.9, step: 0.01, unit: "%" },
+type SliderGroup = { name: string; desc: string; items: SliderDef[] };
+const GROUPS: SliderGroup[] = [
+  {
+    name: "Pace",
+    desc: "How often swaps start and how much of the wall moves at once.",
+    items: [
+      { k: "swapEvery", label: "Swap pace: a swap starts every", min: 0.1, max: 10, step: 0.05, unit: "s", hint: "Average gap between swaps across the whole wall." },
+      { k: "jitter", label: "Jitter", min: 0, max: 0.49, step: 0.01, unit: "%", hint: "Random lead or lag on each gap so it never ticks like a clock." },
+      { k: "maxChanging", label: "Max changing at once", min: 0.01, max: 1, step: 0.01, unit: "%", hint: "Share of cells allowed to be mid-swap together." },
+      { k: "hold", label: "Hold", min: 0, max: 60, step: 0.5, unit: "s", hint: "Minimum time a landed photo stays before it can swap again." },
+      { k: "speed", label: "Motion speed", min: 0.1, max: 3, step: 0.05, unit: "×", hint: "Scales every duration below (higher is faster)." },
+    ],
+  },
+  {
+    name: "Swap motion",
+    desc: "The fade to white, the empty slot, and the glide in.",
+    items: [
+      { k: "whiten", label: "Fade to white", min: 0, max: 3, step: 0.01, unit: "s", hint: "Lingers on the photo, then washes to white." },
+      { k: "emptyMin", label: "White slot wait (min)", min: 0, max: 3, step: 0.01, unit: "s", hint: "Shortest pause before the new photo falls." },
+      { k: "emptyMax", label: "White slot wait (max)", min: 0, max: 3, step: 0.01, unit: "s", hint: "Longest pause before the new photo falls." },
+      { k: "slide", label: "Glide duration", min: 0.05, max: 5, step: 0.01, unit: "s", hint: "Leaves quickly, long gentle slow-down at the end." },
+      { k: "slideFrom", label: "Drop height", min: 0, max: 3, step: 0.05, unit: "cell", hint: "Start height above the slot, in cell heights." },
+      { k: "fadeIn", label: "Fade-in share", min: 0, max: 1, step: 0.01, unit: "%", hint: "Part of the glide spent fading in." },
+    ],
+  },
+  {
+    name: "Settle & grid",
+    desc: "Tilt, settle zoom, variation, and the grid itself.",
+    items: [
+      { k: "tilt", label: "Starting tilt", min: 0, max: 20, step: 0.1, unit: "°", hint: "Random left or right; straightens a little after landing." },
+      { k: "settle", label: "Settle zoom", min: 0.5, max: 2, step: 0.01, unit: "×", hint: "Starts slightly larger and eases to normal." },
+      { k: "vary", label: "Vary each swap", min: 0, max: 0.9, step: 0.01, unit: "%", hint: "Each swap’s lengths and distance vary by up to ±this." },
+      { k: "cols", label: "Columns", min: 1, max: 24, step: 1, unit: "n", hint: "Grid columns on the wall. Walls can override the grid on the Walls page." },
+      { k: "rows", label: "Rows", min: 1, max: 16, step: 1, unit: "n", hint: "Grid rows on the wall." },
+    ],
+  },
 ];
 
-const fmt = (d: SliderDef) => (v: number) => (d.unit === "%" ? `${Math.round(v * 100)}%` : d.unit === "s" ? `${v.toFixed(2)} s` : d.unit === "°" ? `${v.toFixed(1)}°` : `${v.toFixed(2)}×`);
+const fmt = (d: SliderDef) => (v: number) =>
+  d.unit === "%"
+    ? `${Math.round(v * 100)}%`
+    : d.unit === "s"
+      ? `${v.toFixed(2)} s`
+      : d.unit === "°"
+        ? `${v.toFixed(1)}°`
+        : d.unit === "n"
+          ? String(Math.round(v))
+          : d.unit === "cell"
+            ? `${v.toFixed(2)} cell`
+            : `${v.toFixed(2)}×`;
 const newId = () => `fx-${Math.random().toString(36).slice(2, 8)}`;
 
 export function MotionEditor({ initial, manifest }: { initial: MotionSettings; manifest: WallManifest }) {
@@ -175,35 +205,22 @@ export function MotionEditor({ initial, manifest }: { initial: MotionSettings; m
               <TabsTrigger value="code">Effect code</TabsTrigger>
             </TabsList>
             <TabsContent value="sliders" className="mt-3">
-              <div className="grid gap-4 lg:grid-cols-2">
-                <Card className="gap-4 py-4">
-                  <CardHeader>
-                    <CardTitle>Timing</CardTitle>
-                    <CardDescription>How often photos change.</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <FieldGroup>
-                      {TIMING.map((d) => (
-                        <SliderRow key={d.k} label={d.label} min={d.min} max={d.max} step={d.step} value={sliders[d.k]} onChange={(v) => setSlider(d.k, v)} format={fmt(d)} />
-                      ))}
-                      <SliderRow label="Columns" min={1} max={24} value={sliders.cols} onChange={(v) => setSlider("cols", v)} hint="Walls can override the grid on the Walls page." />
-                      <SliderRow label="Rows" min={1} max={16} value={sliders.rows} onChange={(v) => setSlider("rows", v)} />
-                    </FieldGroup>
-                  </CardContent>
-                </Card>
-                <Card className="gap-4 py-4">
-                  <CardHeader>
-                    <CardTitle>The swap</CardTitle>
-                    <CardDescription>The built-in whiten and drop. Custom effects can read these too.</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <FieldGroup>
-                      {LOOK.map((d) => (
-                        <SliderRow key={d.k} label={d.label} min={d.min} max={d.max} step={d.step} value={sliders[d.k]} onChange={(v) => setSlider(d.k, v)} format={fmt(d)} />
-                      ))}
-                    </FieldGroup>
-                  </CardContent>
-                </Card>
+              <div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-3">
+                {GROUPS.map((g) => (
+                  <Card key={g.name} className="gap-4 py-4">
+                    <CardHeader>
+                      <CardTitle>{g.name}</CardTitle>
+                      <CardDescription>{g.desc}</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <FieldGroup>
+                        {g.items.map((d) => (
+                          <SliderRow key={d.k} label={d.label} min={d.min} max={d.max} step={d.step} value={sliders[d.k]} onChange={(v) => setSlider(d.k, v)} format={fmt(d)} hint={d.hint} />
+                        ))}
+                      </FieldGroup>
+                    </CardContent>
+                  </Card>
+                ))}
               </div>
             </TabsContent>
             <TabsContent value="code" className="mt-3">
@@ -336,6 +353,17 @@ export function MotionEditor({ initial, manifest }: { initial: MotionSettings; m
                 </button>
               ))}
               {preset === "Custom" && <p className="text-xs text-muted-foreground">You’ve adjusted the sliders by hand.</p>}
+              <div className="mt-1 flex flex-col gap-1 rounded-md bg-muted px-3 py-2.5 text-sm">
+                <span>
+                  About <strong>{Math.round(60 / Math.max(0.1, sliders.swapEvery))}</strong> swaps per minute
+                </span>
+                <span>
+                  Each photo stays at least <strong>{Math.round(sliders.hold + (sliders.whiten + sliders.slide) / Math.max(0.05, sliders.speed))} s</strong>
+                </span>
+                <span>
+                  Up to <strong>{Math.max(1, Math.floor(sliders.maxChanging * sliders.cols * sliders.rows))}</strong> of {sliders.cols * sliders.rows} cells changing at once
+                </span>
+              </div>
             </CardContent>
           </Card>
           <Card className="gap-4 py-4">
