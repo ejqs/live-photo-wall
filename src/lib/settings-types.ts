@@ -58,7 +58,9 @@ export type QrLayer = LayerBase & {
   type: "qr";
   x: number;
   y: number;
-  size: number; // % of height
+  size: number; // % of height (free placement only)
+  /** sit in the grid cell under (x, y), sized to it; no photos play there. Missing means true. */
+  cell?: boolean;
   style: "classic" | "dots" | "rounded";
   logoAssetId: string | null;
   inverse: boolean;
@@ -165,6 +167,7 @@ export const DEFAULT_DESIGN: Design = {
       x: 91,
       y: 82,
       size: 22,
+      cell: true,
       style: "rounded",
       logoAssetId: null,
       inverse: false,

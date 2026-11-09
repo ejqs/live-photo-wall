@@ -48,6 +48,8 @@ export type WallStatsMessage = {
   upNext: string[];
   /** photo id per cell, reading order */
   cells: (string | null)[];
+  /** cells the QR card sits in (optional: older walls don't send it) */
+  qrCells?: number[];
   grid: { cols: number; rows: number };
   /** the wall window's width / height, for the mirror */
   aspect: number;

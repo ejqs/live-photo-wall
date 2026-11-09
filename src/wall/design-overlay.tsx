@@ -4,6 +4,7 @@ import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { SYSTEM_FONTS, type Design, type DesignLayer } from "@/lib/settings-types";
 import type { WallFont } from "./types";
 import { useQr } from "./qr";
+import { cellAt, inCell } from "./qr-cell";
 
 export function fontCss(font: string, fonts: WallFont[]): string {
   if (font in SYSTEM_FONTS) return SYSTEM_FONTS[font as keyof typeof SYSTEM_FONTS].css;
@@ -27,6 +28,7 @@ export function DesignOverlay({
   assets,
   qrUrl,
   hideQr,
+  grid,
   selectedId,
   onLayerPointerDown,
 }: {
@@ -35,6 +37,8 @@ export function DesignOverlay({
   assets: Record<string, string>;
   qrUrl: string | null;
   hideQr?: boolean;
+  /** the wall's grid; a QR card set to sit in a cell needs it */
+  grid?: { cols: number; rows: number };
   selectedId?: string | null;
   onLayerPointerDown?: (e: ReactPointerEvent<HTMLElement>, layer: DesignLayer) => void;
 }) {
@@ -100,6 +104,20 @@ export function DesignOverlay({
             );
           }
           case "qr":
+            if (grid && inCell(layer))
+              return (
+                <QrCell
+                  key={layer.id}
+                  layer={layer}
+                  data={qrUrl}
+                  logo={layer.logoAssetId ? assets[layer.logoAssetId] ?? null : null}
+                  style={common}
+                  onPointerDown={down}
+                  grid={grid}
+                  gap={design.gap}
+                  radius={design.radius}
+                />
+              );
             return <QrCard key={layer.id} layer={layer} data={qrUrl} logo={layer.logoAssetId ? assets[layer.logoAssetId] ?? null : null} style={common} onPointerDown={down} />;
         }
       })}
@@ -150,6 +168,76 @@ function QrCard({
           {layer.label}
         </span>
       )}
+    </div>
+  );
+}
+
+/** A QR card that fills one grid cell, laid out the same way as the engine's grid. */
+function QrCell({
+  layer,
+  data,
+  logo,
+  style,
+  onPointerDown,
+  grid,
+  gap,
+  radius,
+}: {
+  layer: Extract<DesignLayer, { type: "qr" }>;
+  data: string | null;
+  logo: string | null;
+  style: CSSProperties;
+  onPointerDown?: (e: ReactPointerEvent<HTMLElement>) => void;
+  grid: { cols: number; rows: number };
+  gap: number;
+  radius: number;
+}) {
+  const src = useQr(data, layer, logo);
+  const { cols, rows } = grid;
+  const { row, col } = cellAt(layer.x, layer.y, cols, rows);
+  const w = `((100cqw - ${(cols + 1) * gap}cqh) / ${cols})`;
+  const h = `((100cqh - ${(rows + 1) * gap}cqh) / ${rows})`;
+  // the label shrinks to fit the cell's width
+  const fs = `min(12cqh, ${Math.round(160 / Math.max(6, layer.label.length))}cqw)`;
+  const qr = layer.label ? `min(100cqw, 100cqh - 1.2 * ${fs} - 3cqh)` : "min(100cqw, 100cqh)";
+  return (
+    <div
+      onPointerDown={onPointerDown}
+      className="absolute"
+      style={{
+        ...style,
+        left: `calc(${gap}cqh + ${col} * (${w} + ${gap}cqh))`,
+        top: `calc(${gap}cqh + ${row} * (${h} + ${gap}cqh))`,
+        width: `calc${w}`,
+        height: `calc${h}`,
+        background: layer.cardColor,
+        color: layer.textColor,
+        borderRadius: radius ? `${radius}cqh` : undefined,
+        overflow: "hidden",
+      }}
+    >
+      <div className="absolute flex flex-col items-center justify-center" style={{ inset: "7%", containerType: "size", gap: "3cqh" }}>
+        {src ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={src} alt="QR code to add your photo" draggable={false} style={{ width: `calc(${qr})`, height: `calc(${qr})` }} />
+        ) : (
+          <div style={{ width: `calc(${qr})`, height: `calc(${qr})` }} />
+        )}
+        {layer.label && (
+          <span
+            style={{
+              fontSize: fs,
+              fontWeight: 700,
+              lineHeight: 1.1,
+              textAlign: "center",
+              whiteSpace: "nowrap",
+              fontFamily: "var(--font-inter), system-ui, sans-serif",
+            }}
+          >
+            {layer.label}
+          </span>
+        )}
+      </div>
     </div>
   );
 }

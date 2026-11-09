@@ -1,6 +1,6 @@
 "use client";
 
-import { CopyIcon, RefreshCwIcon, RotateCwIcon, SearchIcon, XIcon } from "lucide-react";
+import { CopyIcon, QrCodeIcon, RefreshCwIcon, RotateCwIcon, SearchIcon, XIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
@@ -347,6 +347,12 @@ function Mirror({ stats, byId, hidden, onPick }: { stats: WallStatsMessage | nul
       <div className="grid size-full" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))` }}>
         {stats.cells.map((id, i) => {
           const p = id ? byId.get(id) : undefined;
+          if (stats.qrCells?.includes(i))
+            return (
+              <span key={i} className="flex items-center justify-center bg-white text-zinc-900" title="QR code">
+                <QrCodeIcon className="size-1/2 max-h-6 max-w-6" />
+              </span>
+            );
           if (!p) return <span key={i} className="bg-zinc-900" />;
           const fresh = stats.fastLane?.photoId === p.id;
           return (
