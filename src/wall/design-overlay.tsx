@@ -172,7 +172,25 @@ function QrCard({
   );
 }
 
-/** A QR card that fills one grid cell, laid out the same way as the engine's grid. */
+/**
+ * A QR card that fills one grid cell, laid out the same way as the engine's grid. In a wide
+ * cell the label sits beside the code; in a square or tall cell it goes underneath.
+ */
+const QR_CELL_CSS = `
+.lpw-qc{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5cqh;padding:9cqmin;}
+.lpw-qc-code{flex:none;width:min(100cqw - 18cqmin,100cqh - 18cqmin - 20cqh);aspect-ratio:1;}
+.lpw-qc-text{display:flex;flex-direction:column;align-items:center;text-align:center;gap:2cqh;}
+.lpw-qc-label{font-weight:800;line-height:1.05;letter-spacing:-0.01em;font-size:min(9cqh,14cqw);text-wrap:balance;}
+.lpw-qc-hint{display:none;}
+@container (min-aspect-ratio: 5/4){
+  .lpw-qc{flex-direction:row;gap:6cqw;}
+  .lpw-qc-code{width:auto;height:min(100cqh - 18cqmin,55cqw);}
+  .lpw-qc-text{align-items:flex-start;text-align:left;flex:1;min-width:0;gap:4cqh;}
+  .lpw-qc-label{font-size:min(16cqh,8.2cqw);}
+  .lpw-qc-hint{display:block;font-weight:500;opacity:.6;line-height:1.15;font-size:min(8.5cqh,5cqw);}
+}
+`;
+
 function QrCell({
   layer,
   data,
@@ -197,45 +215,42 @@ function QrCell({
   const { row, col } = cellAt(layer.x, layer.y, cols, rows);
   const w = `((100cqw - ${(cols + 1) * gap}cqh) / ${cols})`;
   const h = `((100cqh - ${(rows + 1) * gap}cqh) / ${rows})`;
-  // the label shrinks to fit the cell's width
-  const fs = `min(12cqh, ${Math.round(160 / Math.max(6, layer.label.length))}cqw)`;
-  const qr = layer.label ? `min(100cqw, 100cqh - 1.2 * ${fs} - 3cqh)` : "min(100cqw, 100cqh)";
+  // without a grid gap the card would touch the photos around it, so it keeps its own margin
+  const short = `min(${w}, ${h})`;
+  const inset = gap ? "0px" : `(${short} * 0.06)`;
   return (
     <div
       onPointerDown={onPointerDown}
       className="absolute"
       style={{
         ...style,
-        left: `calc(${gap}cqh + ${col} * (${w} + ${gap}cqh))`,
-        top: `calc(${gap}cqh + ${row} * (${h} + ${gap}cqh))`,
-        width: `calc${w}`,
-        height: `calc${h}`,
+        left: `calc(${gap}cqh + ${col} * (${w} + ${gap}cqh) + ${inset})`,
+        top: `calc(${gap}cqh + ${row} * (${h} + ${gap}cqh) + ${inset})`,
+        width: `calc(${w} - 2 * ${inset})`,
+        height: `calc(${h} - 2 * ${inset})`,
         background: layer.cardColor,
         color: layer.textColor,
-        borderRadius: radius ? `${radius}cqh` : undefined,
+        borderRadius: `max(${radius}cqh, ${short} * 0.08)`,
+        boxShadow: "0 0.6cqh 2.4cqh rgba(0,0,0,.35)",
         overflow: "hidden",
+        fontFamily: "var(--font-inter), system-ui, sans-serif",
+        // the card is the container its contents (and the wide-cell layout) measure against
+        containerType: "size",
       }}
     >
-      <div className="absolute flex flex-col items-center justify-center" style={{ inset: "7%", containerType: "size", gap: "3cqh" }}>
+      <style dangerouslySetInnerHTML={{ __html: QR_CELL_CSS }} />
+      <div className="lpw-qc">
         {src ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={src} alt="QR code to add your photo" draggable={false} style={{ width: `calc(${qr})`, height: `calc(${qr})` }} />
+          <img src={src} alt="QR code to add your photo" draggable={false} className="lpw-qc-code" />
         ) : (
-          <div style={{ width: `calc(${qr})`, height: `calc(${qr})` }} />
+          <div className="lpw-qc-code" />
         )}
         {layer.label && (
-          <span
-            style={{
-              fontSize: fs,
-              fontWeight: 700,
-              lineHeight: 1.1,
-              textAlign: "center",
-              whiteSpace: "nowrap",
-              fontFamily: "var(--font-inter), system-ui, sans-serif",
-            }}
-          >
-            {layer.label}
-          </span>
+          <div className="lpw-qc-text">
+            <span className="lpw-qc-label">{layer.label}</span>
+            <span className="lpw-qc-hint">Scan with your phone camera</span>
+          </div>
         )}
       </div>
     </div>
