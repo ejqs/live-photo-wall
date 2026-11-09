@@ -50,6 +50,8 @@ export type WallStatsMessage = {
   cells: (string | null)[];
   /** cells the QR card sits in (optional: older walls don't send it) */
   qrCells?: number[];
+  /** cells under a floating QR card, which only show roster photos */
+  rosterCells?: number[];
   grid: { cols: number; rows: number };
   /** the wall window's width / height, for the mirror */
   aspect: number;

@@ -471,7 +471,7 @@ function LayerProps({
                 label="Sit in a grid cell"
                 checked={layer.cell !== false}
                 onChange={(cell) => patch({ cell })}
-                hint="The card fills the cell nearest to where you drag it, and no photos play in that cell. Turn off to place and size it freely over the photos."
+                hint="On: the card fills the cell nearest to where you drag it, and no photos play there. Off: place and size it freely over the photos; the cells under it only show roster photos, never guest photos."
               />
               {layer.cell === false && (
                 <SliderRow label="Size" min={8} max={80} step={0.5} value={layer.size} onChange={(size) => patch({ size })} format={pct} hint="Percent of the wall's height. Guests need to scan it from across the room." />

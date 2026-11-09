@@ -142,6 +142,7 @@ function QrCard({
   return (
     <div
       onPointerDown={onPointerDown}
+      data-lpw-qr-float=""
       className="absolute flex flex-col items-center"
       style={{
         ...style,

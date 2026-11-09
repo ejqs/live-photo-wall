@@ -78,6 +78,9 @@ export class WallEngine {
   private coverColor = "#ffffff";
   /** cells kept free of photos (the QR card sits there) */
   private blocked = new Set<number>();
+  /** cells partly under a floating QR card: roster photos only, so no guest photo is ever covered */
+  private rosterOnly = new Set<number>();
+  private rosterNext = 0;
   swaps = 0;
   warning: string | null = null;
 
@@ -146,6 +149,27 @@ export class WallEngine {
     c.busyUntil = Number.POSITIVE_INFINITY;
   }
 
+  /** Only roster photos play in these cells (reading-order indices). */
+  setRosterOnly(indices: number[], now: number) {
+    const next = new Set(indices);
+    if (next.size === this.rosterOnly.size && [...next].every((i) => this.rosterOnly.has(i))) return;
+    this.rosterOnly = next;
+    // a guest photo now under the card leaves at the next opportunity
+    for (const c of this.cells) if (next.has(c.index) && c.photoId && !this.isRoster(c.photoId)) c.busyUntil = Math.min(c.busyUntil, now);
+  }
+
+  cellRects(): DOMRect[] {
+    return this.cells.map((c) => c.el.getBoundingClientRect());
+  }
+
+  rosterOnlyCells(): number[] {
+    return [...this.rosterOnly];
+  }
+
+  private isRoster(id: string) {
+    return this.photos.get(id)?.source === "roster";
+  }
+
   private open(c: Cell) {
     return !this.blocked.has(c.index);
   }
@@ -194,7 +218,7 @@ export class WallEngine {
     if (this.cells.some((c) => c.pending?.photoId === photoId)) return null;
     const plan = (cell: Cell) => planSwap(this.motion.doc, this.motion.sliders, this.motion.params, this.cellVars(cell), this.rng);
     const candidates = this.cells
-      .filter((c) => this.open(c) && !c.pending && (c.swap ? c.swap.end : 0) < now + lead && c.photoId !== photoId)
+      .filter((c) => this.open(c) && !this.rosterOnly.has(c.index) && !c.pending && (c.swap ? c.swap.end : 0) < now + lead && c.photoId !== photoId)
       .sort((a, b) => a.lastChanged - b.lastChanged);
     if (!candidates.length) return null;
     const pool = candidates.slice(0, Math.max(1, Math.ceil(candidates.length / 2)));
@@ -335,6 +359,7 @@ export class WallEngine {
     this.lastTakenHold = 0;
     const shown = new Set(this.shownIds());
     for (const c of this.cells) if (c.pending) shown.add(c.pending.photoId);
+    if (this.rosterOnly.has(cell.index)) return this.takeRoster(cell, shown, allowRepeat);
     const pi = this.priority.findIndex((x) => this.ready.has(x.id) && !shown.has(x.id));
     if (pi >= 0) {
       const [p] = this.priority.splice(pi, 1);
@@ -367,6 +392,22 @@ export class WallEngine {
       }
     }
     return fallback;
+  }
+
+  /** A roster photo for a cell under the QR card, from its own pointer so the main rotation is untouched. */
+  private takeRoster(cell: Cell, shown: Set<string>, allowRepeat: boolean): string | null {
+    const roster = this.order.filter((id) => this.ready.has(id) && this.isRoster(id));
+    const n = roster.length;
+    if (!n) return null;
+    for (let k = 0; k < n; k++) {
+      const id = roster[(this.rosterNext + k) % n];
+      if (shown.has(id) || id === cell.photoId) continue;
+      this.rosterNext = (this.rosterNext + k + 1) % n;
+      return id;
+    }
+    if (!allowRepeat) return null;
+    const other = roster.find((id) => id !== cell.photoId);
+    return other ?? null;
   }
 
   private reshuffle() {
