@@ -65,6 +65,7 @@ export function DesignOverlay({
               <div
                 key={layer.id}
                 onPointerDown={down}
+                data-lpw-cover={layer.protect ? "" : undefined}
                 className="absolute whitespace-pre-line"
                 style={{
                   ...common,
@@ -98,6 +99,7 @@ export function DesignOverlay({
                 alt=""
                 draggable={false}
                 onPointerDown={down}
+                data-lpw-cover={layer.protect ? "" : undefined}
                 className="absolute"
                 style={{ ...common, left: `${layer.x}%`, top: `${layer.y}%`, width: `${layer.w}cqw`, transform: "translate(-50%, -50%)", opacity: layer.opacity }}
               />
@@ -142,7 +144,7 @@ function QrCard({
   return (
     <div
       onPointerDown={onPointerDown}
-      data-lpw-qr-float=""
+      data-lpw-cover=""
       className="absolute flex flex-col items-center"
       style={{
         ...style,

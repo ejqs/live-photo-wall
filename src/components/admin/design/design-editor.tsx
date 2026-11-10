@@ -18,7 +18,7 @@ import type { AssetItem } from "@/lib/admin-data";
 import { SYSTEM_FONTS, type Design, type DesignLayer } from "@/lib/settings-types";
 import { cn } from "@/lib/utils";
 import { DesignOverlay, FontFaces } from "@/wall/design-overlay";
-import { qrCells } from "@/wall/qr-cell";
+import { COVER_SELECTOR, coveredCells, qrCells } from "@/wall/qr-cell";
 import type { WallFont } from "@/wall/types";
 import { ago } from "@/lib/time";
 
@@ -62,6 +62,9 @@ export function DesignEditor({
   const [saving, setSaving] = useState<"idle" | "saving" | "saved">("idle");
   const [pending, start] = useTransition();
   const canvas = useRef<HTMLDivElement>(null);
+  const gridEl = useRef<HTMLDivElement>(null);
+  // cells under a floating QR card: the wall only plays roster photos there (same rule as the wall)
+  const [rosterCells, setRosterCells] = useState<number[]>([]);
   const first = useRef(true);
 
   const fonts: WallFont[] = useMemo(() => assets.filter((a) => a.kind === "font").map((a) => ({ id: a.id, family: fontFamily(a.id), url: a.url })), [assets]);
@@ -155,6 +158,23 @@ export function DesignEditor({
     };
   }, []);
 
+  // measure which cells the floating QR card covers, whenever the layout changes
+  useEffect(() => {
+    const root = canvas.current;
+    const g = gridEl.current;
+    if (!root || !g) return;
+    const measure = () => {
+      const cards = [...root.querySelectorAll<HTMLElement>(COVER_SELECTOR)].map((e) => e.getBoundingClientRect());
+      const next = coveredCells([...g.children].map((c) => c.getBoundingClientRect()), cards);
+      setRosterCells((prev) => (prev.join() === next.join() ? prev : next));
+    };
+    const ro = new ResizeObserver(measure);
+    ro.observe(root);
+    root.querySelectorAll(COVER_SELECTOR).forEach((e) => ro.observe(e));
+    measure();
+    return () => ro.disconnect();
+  }, [design, grid.cols, grid.rows, ratio]);
+
   // keyboard nudge
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -228,6 +248,7 @@ export function DesignEditor({
             onPointerDown={() => setSelected(null)}
           >
             <div
+              ref={gridEl}
               className="absolute inset-0 grid"
               style={{
                 // same layout as the wall engine, so the QR cell lines up
@@ -249,10 +270,40 @@ export function DesignEditor({
               })}
             </div>
             <DesignOverlay design={design} fonts={fonts} assets={assetMap} qrUrl={qrUrl} grid={grid} selectedId={selected} onLayerPointerDown={onLayerPointerDown} />
+            {(rosterCells.length > 0 || qrTaken.size > 0) && (
+              <div
+                className="pointer-events-none absolute inset-0 z-20 grid"
+                style={{
+                  gridTemplateColumns: `repeat(${grid.cols}, minmax(0, 1fr))`,
+                  gridTemplateRows: `repeat(${grid.rows}, minmax(0, 1fr))`,
+                  gap: `${design.gap}cqh`,
+                  padding: `${design.gap}cqh`,
+                }}
+              >
+                {Array.from({ length: cells }, (_, i) =>
+                  rosterCells.includes(i) ? (
+                    <div key={i} className="relative border-2 border-dashed border-amber-400 bg-amber-400/15" style={{ borderRadius: `${design.radius}cqh` }}>
+                      <span className="absolute top-1 left-1 rounded bg-amber-400 px-1 text-[10px] leading-4 font-semibold text-amber-950">Roster only</span>
+                    </div>
+                  ) : qrTaken.has(i) ? (
+                    <div key={i} className="relative">
+                      <span className="absolute top-1 left-1 rounded bg-sky-400 px-1 text-[10px] leading-4 font-semibold text-sky-950">No photos</span>
+                    </div>
+                  ) : (
+                    <div key={i} />
+                  ),
+                )}
+              </div>
+            )}
           </div>
           <p className="text-center text-xs text-muted-foreground">
             The photos are frozen here so you can place things. Drag to move, arrow keys to nudge (Shift for bigger steps). Positions are relative, so the design fits any wall size.
           </p>
+          {rosterCells.length > 0 && (
+            <p className="text-center text-xs text-amber-600">
+              Cells marked Roster only are partly under the QR card or a protected layer. The wall only plays roster photos there, so a guest photo is never hidden behind it.
+            </p>
+          )}
         </div>
 
         <div className="flex flex-col gap-4">
@@ -442,6 +493,12 @@ function LayerProps({
               </Field>
               <SwitchRow label="All caps" checked={layer.uppercase} onChange={(uppercase) => patch({ uppercase })} />
               <SwitchRow label="Shadow" checked={layer.shadow} onChange={(shadow) => patch({ shadow })} />
+              <SwitchRow
+                label="Keep guest photos out from under it"
+                checked={!!layer.protect}
+                onChange={(protect) => patch({ protect })}
+                hint="Cells this covers only play roster photos, so a guest's photo is never hidden behind it. They're marked Roster only above."
+              />
             </>
           )}
           {layer.type === "image" && (
@@ -463,6 +520,12 @@ function LayerProps({
               </Field>
               <SliderRow label="Width" min={1} max={200} step={0.5} value={layer.w} onChange={(w) => patch({ w })} format={pct} hint="Percent of the wall's width. 100% covers the whole wall." />
               <SliderRow label="Opacity" min={0} max={1} step={0.01} value={layer.opacity} onChange={(opacity) => patch({ opacity })} format={(v) => `${Math.round(v * 100)}%`} />
+              <SwitchRow
+                label="Keep guest photos out from under it"
+                checked={!!layer.protect}
+                onChange={(protect) => patch({ protect })}
+                hint="Cells this covers only play roster photos, so a guest's photo is never hidden behind it. They're marked Roster only above."
+              />
             </>
           )}
           {layer.type === "qr" && (

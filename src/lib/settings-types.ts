@@ -38,7 +38,13 @@ export type GuestPageSettings = {
   headerAssetId: string | null;
 };
 
-type LayerBase = { id: string; name: string; hidden?: boolean };
+type LayerBase = {
+  id: string;
+  name: string;
+  hidden?: boolean;
+  /** cells under this layer only play roster photos, so no guest photo is hidden behind it (always on for a floating QR) */
+  protect?: boolean;
+};
 export type TextLayer = LayerBase & {
   type: "text";
   text: string;
