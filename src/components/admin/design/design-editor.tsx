@@ -18,6 +18,7 @@ import type { AssetItem } from "@/lib/admin-data";
 import { SYSTEM_FONTS, type Design, type DesignLayer } from "@/lib/settings-types";
 import { cn } from "@/lib/utils";
 import { DesignOverlay, FontFaces } from "@/wall/design-overlay";
+import { qrCells } from "@/wall/qr-cell";
 import type { WallFont } from "@/wall/types";
 import { ago } from "@/lib/time";
 
@@ -117,7 +118,7 @@ export function DesignEditor({
         : type === "image"
           ? { ...base, type, name: "Overlay", assetId: images[0]?.id ?? null, x: 50, y: 50, w: 30, opacity: 1 }
           : type === "qr"
-            ? { ...base, type, name: "Guest QR", x: 90, y: 80, size: 22, style: "rounded", logoAssetId: null, inverse: false, label: "Add your photo", cardColor: "#ffffff", textColor: "#09090b" }
+            ? { ...base, type, name: "Guest QR", x: 90, y: 80, size: 22, cell: true, style: "rounded", logoAssetId: null, inverse: false, label: "Add your photo", cardColor: "#ffffff", textColor: "#09090b" }
             : { ...base, type, name: "Dim", amount: 0.4, mode: "even" };
     setDesign((d) => ({ ...d, layers: type === "dim" ? [l, ...d.layers] : [...d.layers, l] }));
     setSelected(id);
@@ -171,6 +172,7 @@ export function DesignEditor({
   });
 
   const cells = grid.cols * grid.rows;
+  const qrTaken = new Set(qrCells(design, grid.cols, grid.rows, false));
   const publish = () =>
     start(async () => {
       const r = await publishDesign(design);
@@ -222,29 +224,31 @@ export function DesignEditor({
           <div
             ref={canvas}
             className="relative mx-auto w-full overflow-hidden rounded-lg border select-none"
-            style={{ aspectRatio: `${aspect.w} / ${aspect.h}`, background: design.background, maxHeight: "70vh", maxWidth: `calc(70vh * ${aspect.w / aspect.h})` }}
+            style={{ aspectRatio: `${aspect.w} / ${aspect.h}`, background: design.background, maxHeight: "70vh", maxWidth: `calc(70vh * ${aspect.w / aspect.h})`, containerType: "size" }}
             onPointerDown={() => setSelected(null)}
           >
             <div
               className="absolute inset-0 grid"
               style={{
-                gridTemplateColumns: `repeat(${grid.cols}, 1fr)`,
-                gridTemplateRows: `repeat(${grid.rows}, 1fr)`,
+                // same layout as the wall engine, so the QR cell lines up
+                gridTemplateColumns: `repeat(${grid.cols}, minmax(0, 1fr))`,
+                gridTemplateRows: `repeat(${grid.rows}, minmax(0, 1fr))`,
                 gap: `${design.gap}cqh`,
-                containerType: "size",
+                padding: `${design.gap}cqh`,
               }}
             >
               {Array.from({ length: cells }, (_, i) => {
+                if (qrTaken.has(i)) return <div key={i} />;
                 const t = thumbs.length ? thumbs[i % thumbs.length] : null;
                 return t ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img key={i} src={t} alt="" className="size-full object-cover" style={{ borderRadius: `${design.radius}%` }} draggable={false} />
+                  <img key={i} src={t} alt="" className="size-full object-cover" style={{ borderRadius: `${design.radius}cqh` }} draggable={false} />
                 ) : (
-                  <div key={i} className="size-full bg-zinc-800" style={{ borderRadius: `${design.radius}%`, opacity: 0.4 + ((i * 37) % 60) / 100 }} />
+                  <div key={i} className="size-full bg-zinc-800" style={{ borderRadius: `${design.radius}cqh`, opacity: 0.4 + ((i * 37) % 60) / 100 }} />
                 );
               })}
             </div>
-            <DesignOverlay design={design} fonts={fonts} assets={assetMap} qrUrl={qrUrl} selectedId={selected} onLayerPointerDown={onLayerPointerDown} />
+            <DesignOverlay design={design} fonts={fonts} assets={assetMap} qrUrl={qrUrl} grid={grid} selectedId={selected} onLayerPointerDown={onLayerPointerDown} />
           </div>
           <p className="text-center text-xs text-muted-foreground">
             The photos are frozen here so you can place things. Drag to move, arrow keys to nudge (Shift for bigger steps). Positions are relative, so the design fits any wall size.
@@ -463,7 +467,15 @@ function LayerProps({
           )}
           {layer.type === "qr" && (
             <>
-              <SliderRow label="Size" min={8} max={80} step={0.5} value={layer.size} onChange={(size) => patch({ size })} format={pct} hint="Percent of the wall's height. Guests need to scan it from across the room." />
+              <SwitchRow
+                label="Sit in a grid cell"
+                checked={layer.cell !== false}
+                onChange={(cell) => patch({ cell })}
+                hint="On: the card fills the cell nearest to where you drag it, and no photos play there. Off: place and size it freely over the photos; the cells under it only show roster photos, never guest photos."
+              />
+              {layer.cell === false && (
+                <SliderRow label="Size" min={8} max={80} step={0.5} value={layer.size} onChange={(size) => patch({ size })} format={pct} hint="Percent of the wall's height. Guests need to scan it from across the room." />
+              )}
               <Field>
                 <FieldLabel>Style</FieldLabel>
                 <ToggleGroup type="single" variant="outline" size="sm" value={layer.style} onValueChange={(v) => v && patch({ style: v as "classic" | "dots" | "rounded" })}>

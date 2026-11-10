@@ -240,6 +240,7 @@ const Layer = z.discriminatedUnion("type", [
     x: z.number().min(0).max(100),
     y: z.number().min(0).max(100),
     size: z.number().min(8).max(80),
+    cell: z.boolean().optional(),
     style: z.enum(["classic", "dots", "rounded"]),
     logoAssetId: z.string().uuid().nullable(),
     inverse: z.boolean(),

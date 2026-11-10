@@ -369,6 +369,8 @@ export function WallApp() {
         lastWatchdogReload: watchdogStore.last(),
         upNext: engine.upNext(1000),
         cells: engine.cellIds(),
+        qrCells: engine.blockedCells(),
+        rosterCells: engine.rosterOnlyCells(),
         grid: engine.grid(),
         aspect: innerWidth / Math.max(1, innerHeight),
         warning,

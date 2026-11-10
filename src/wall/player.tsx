@@ -4,6 +4,7 @@ import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from "rea
 import { WHITEN_AND_DROP, checkEffect, type MotionDoc } from "@/wallmotion";
 import { DesignOverlay, FontFaces } from "./design-overlay";
 import { ENGINE_CSS, WallEngine, type Reservation } from "./engine";
+import { qrCells } from "./qr-cell";
 import { imgUrl, type WallManifest } from "./types";
 
 export type PlayerHandle = {
@@ -94,6 +95,47 @@ export const WallPlayer = forwardRef<PlayerHandle, PlayerProps>(function WallPla
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [manifest.wall.cols, manifest.wall.rows]);
 
+  // the QR card's cell stays free of photos
+  const qrHidden = !!hideQr || !manifest.wall.showQr;
+  const blocked = useMemo(
+    () => qrCells(manifest.design, manifest.wall.cols, manifest.wall.rows, qrHidden).join(","),
+    [manifest.design, manifest.wall.cols, manifest.wall.rows, qrHidden],
+  );
+  useEffect(() => {
+    engineRef.current?.setBlocked(blocked ? blocked.split(",").map(Number) : [], now());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [blocked, manifest.wall.cols, manifest.wall.rows]);
+
+  // a floating QR card covers parts of some cells: only roster photos play there
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const measure = () => {
+      const engine = engineRef.current;
+      if (!engine) return;
+      const cards = [...root.querySelectorAll<HTMLElement>("[data-lpw-qr-float]")].map((e) => e.getBoundingClientRect());
+      const idx: number[] = [];
+      engine.cellRects().forEach((r, i) => {
+        for (const c of cards) {
+          const ox = Math.max(0, Math.min(r.right, c.right) - Math.max(r.left, c.left));
+          const oy = Math.max(0, Math.min(r.bottom, c.bottom) - Math.max(r.top, c.top));
+          if (ox * oy > 0.02 * r.width * r.height) {
+            idx.push(i);
+            break;
+          }
+        }
+      });
+      engine.setRosterOnly(idx, now());
+    };
+    const ro = new ResizeObserver(measure);
+    ro.observe(root);
+    root.querySelectorAll("[data-lpw-qr-float]").forEach((e) => ro.observe(e));
+    measure();
+    return () => ro.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [manifest.design, manifest.wall.cols, manifest.wall.rows, qrHidden]);
+
   // photo list + background download (only fully decoded photos enter the rotation)
   useEffect(() => {
     const engine = engineRef.current;
@@ -143,11 +185,11 @@ export const WallPlayer = forwardRef<PlayerHandle, PlayerProps>(function WallPla
   }));
 
   return (
-    <div className="relative size-full overflow-hidden select-none" style={{ background: manifest.design.background, containerType: "size" }}>
+    <div ref={rootRef} className="relative size-full overflow-hidden select-none" style={{ background: manifest.design.background, containerType: "size" }}>
       <style dangerouslySetInnerHTML={{ __html: ENGINE_CSS }} />
       <FontFaces fonts={manifest.fonts} />
       <div ref={gridRef} className="absolute inset-0" style={{ isolation: "isolate" }} />
-      <DesignOverlay design={manifest.design} fonts={manifest.fonts} assets={manifest.assets} qrUrl={manifest.qrUrl} hideQr={hideQr || !manifest.wall.showQr} />
+      <DesignOverlay design={manifest.design} fonts={manifest.fonts} assets={manifest.assets} qrUrl={manifest.qrUrl} hideQr={qrHidden} grid={manifest.wall} />
     </div>
   );
 });
