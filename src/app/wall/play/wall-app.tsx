@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { BUILD_ID } from "@/lib/build";
 import { WallPlayer, type PlayerHandle } from "@/wall/player";
 import { STATS_CHANNEL, STATS_VERSION, wallLog, watchdogStore, type LogEntry, type LogKind, type WallCommand, type WallStatsMessage } from "@/wall/stats";
 import { countCached, registerServiceWorker, wallStore } from "@/wall/storage";
@@ -34,6 +35,8 @@ export function WallApp() {
   const failed = useRef(new Set<string>());
   const newlyCached = useRef(0);
   const storageInfo = useRef<{ usage: number | null; persisted: boolean | null }>({ usage: null, persisted: null });
+  // a newer deploy is live: reload at a quiet moment so the wall runs the new code
+  const update = useRef<{ build: string; at: number } | null>(null);
   const frames = useRef({ fps: null as number | null, slow: [] as number[] });
   const note = useCallback((k: LogKind, m: string) => {
     logRef.current = wallLog.add(k, m);
@@ -186,6 +189,10 @@ export function WallApp() {
         });
         if (!res.ok) throw new Error();
         const b = await res.json();
+        if (b.build && b.build !== BUILD_ID && update.current === null && !triedUpdate(b.build)) {
+          update.current = { build: b.build, at: Date.now() };
+          note("reload", `New version deployed (${b.build.slice(0, 7)}), reloading at a quiet moment`);
+        }
         lastSyncAt.current = Date.now();
         serverVersion.current = b.version ?? null;
         setOnline(true);
@@ -383,6 +390,16 @@ export function WallApp() {
       if (engine.swaps === lastSwaps && ready > 1 && document.visibilityState === "visible") stalled++;
       else stalled = 0;
       lastSwaps = engine.swaps;
+      // new deploy: wait until no cell is mid-swap and no guest photo is about to land (at most a minute)
+      if (update.current) {
+        const fastLaneSoon = lastFast.current && lastFast.current.at > Date.now() - 2000 && lastFast.current.at < Date.now() + 60_000;
+        const quiet = act.changing === 0 && !fastLaneSoon;
+        if (quiet || Date.now() - update.current.at > 60_000) {
+          markTriedUpdate(update.current.build);
+          location.reload();
+          return;
+        }
+      }
       if (stalled > 180) {
         watchdogStore.mark();
         note("reload", "No swaps for 3 minutes, the watchdog reloaded the wall");
@@ -474,4 +491,20 @@ function describeChange(prev: WallManifest, next: WallManifest) {
   if (prev.motion.version !== next.motion.version) parts.push(`motion v${prev.motion.version} → v${next.motion.version}`);
   if (prev.wall.cols !== next.wall.cols || prev.wall.rows !== next.wall.rows) parts.push(`grid ${next.wall.cols}×${next.wall.rows}`);
   return `Updated v${prev.version} → v${next.version}${parts.length ? ` (${parts.join(", ")})` : ""}`;
+}
+
+// remember which build we reloaded for, so a cached old page can't cause a reload loop
+const UPDATE_KEY = "lpw-update-tried";
+function triedUpdate(build: string) {
+  try {
+    const t = JSON.parse(sessionStorage.getItem(UPDATE_KEY) ?? "null") as { build: string; at: number } | null;
+    return !!t && t.build === build && Date.now() - t.at < 10 * 60_000;
+  } catch {
+    return false;
+  }
+}
+function markTriedUpdate(build: string) {
+  try {
+    sessionStorage.setItem(UPDATE_KEY, JSON.stringify({ build, at: Date.now() }));
+  } catch {}
 }
