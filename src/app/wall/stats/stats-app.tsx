@@ -169,7 +169,7 @@ export function StatsApp() {
         <div className="flex min-h-0 flex-col gap-4 lg:w-[42%] lg:shrink-0">
           <section aria-label="What the wall shows now" className="flex flex-col gap-2">
             <Mirror stats={stale ? null : stats} byId={byId} hidden={hidden} onPick={setConfirming} />
-            <span className="text-xs text-zinc-400">What the wall shows now, updated every second. Click a photo to take it off.</span>
+            <span className="text-xs text-zinc-400">What the wall shows now, updated every second. Click a photo to take it off. Dashed amber cells are under the QR or protected text: roster photos only.</span>
           </section>
 
           <section aria-labelledby="next-h" className="relative flex min-h-[320px] flex-1 flex-col gap-2.5 rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-3.5">
@@ -361,7 +361,12 @@ function Mirror({ stats, byId, hidden, onPick }: { stats: WallStatsMessage | nul
               type="button"
               onClick={() => onPick(p)}
               title={`${describe(p)} · take off the wall`}
-              className={cn("group relative min-h-0 overflow-hidden", fresh && "outline-2 -outline-offset-2 outline-blue-400", hidden.has(p.id) && "opacity-30")}
+              className={cn(
+                "group relative min-h-0 overflow-hidden",
+                fresh && "outline-2 -outline-offset-2 outline-blue-400",
+                stats.rosterCells?.includes(i) && "outline-2 -outline-offset-2 outline-dashed outline-amber-400",
+                hidden.has(p.id) && "opacity-30",
+              )}
             >
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={imgUrl("thumb", p.hash)} alt="" className="size-full object-cover" />

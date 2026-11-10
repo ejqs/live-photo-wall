@@ -18,3 +18,31 @@ export function qrCells(design: Design, cols: number, rows: number, hideQr: bool
   // never take every cell
   return out.size >= cols * rows ? [] : [...out];
 }
+
+/** Share of a cell a floating QR card (or a protected text or image layer) must cover before the cell is kept to roster photos. */
+export const COVER_THRESHOLD = 0.02;
+
+type Box = { left: number; right: number; top: number; bottom: number; width: number; height: number };
+
+/**
+ * Cells (reading order) that a floating QR card covers by more than COVER_THRESHOLD of their
+ * area. Only roster photos play there, so a guest photo is never hidden behind the card. The wall
+ * and the design editor both use this, so what the editor highlights is what the wall does.
+ */
+export function coveredCells(cells: Box[], cards: Box[]): number[] {
+  const out: number[] = [];
+  cells.forEach((r, i) => {
+    for (const c of cards) {
+      const ox = Math.max(0, Math.min(r.right, c.right) - Math.max(r.left, c.left));
+      const oy = Math.max(0, Math.min(r.bottom, c.bottom) - Math.max(r.top, c.top));
+      if (ox * oy > COVER_THRESHOLD * r.width * r.height) {
+        out.push(i);
+        break;
+      }
+    }
+  });
+  return out;
+}
+
+/** Elements whose cells stay roster-only: a floating QR card, and text or image layers set to protect. */
+export const COVER_SELECTOR = "[data-lpw-cover]";
